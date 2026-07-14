@@ -1,0 +1,62 @@
+# GitHub Actions version of azure-pipelines-backend.yml
+# Runs ONLY when you click "Run workflow" (= ADO's manual trigger).
+name: backend-deploy-poc
+
+on:
+  workflow_dispatch:              # manual trigger (like ADO "trigger: none" + Queue)
+    inputs:
+      target:
+        description: 'Where to deploy'
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+jobs:
+  # ── Deploy to DEV ────────────────────────────────────────
+  deploy-dev:
+    if: ${{ inputs.target == 'dev' }}
+    runs-on: self-hosted          # runs on YOUR laptop (runner installed in Step 4)
+    steps:
+      - uses: actions/checkout@v4  # pulls the repo code onto the runner
+      - name: Deploy to DEV folder
+        shell: powershell
+        run: |
+          $dest = "$env:USERPROFILE\poc-deploy\dev"
+          Write-Host "Deploying to $dest ..."
+          if (Test-Path $dest) {
+            $backup = "$env:USERPROFILE\poc-deploy\dev_backup"
+            if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
+            Copy-Item $dest $backup -Recurse -Force
+            Write-Host "Backed up old deploy to $backup"
+          }
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item -Path "$env:GITHUB_WORKSPACE\*" -Destination $dest -Recurse -Force
+          $f = Join-Path $dest "settings.py"
+          (Get-Content $f -Raw) -replace "profile\s*=\s*'.*?'", "profile = 'dev'" | Set-Content $f
+          Write-Host "---- deployed settings.py ----"
+          Get-Content $f
+
+  # ── Deploy to PROD (pauses for your approval first) ──────
+  deploy-prod:
+    needs: [deploy-dev]
+    if: ${{ always() && (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped') }}
+    runs-on: self-hosted
+    environment: production        # <-- THIS creates the approval gate (Step 4)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to PROD folder
+        shell: powershell
+        run: |
+          $dest = "$env:USERPROFILE\poc-deploy\prod"
+          Write-Host "Deploying to $dest ..."
+          if (Test-Path $dest) {
+            $backup = "$env:USERPROFILE\poc-deploy\prod_backup"
+            if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
+            Copy-Item $dest $backup -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item -Path "$env:GITHUB_WORKSPACE\*" -Destination $dest -Recurse -Force
+          $f = Join-Path $dest "settings.py"
+          (Get-Content $f -Raw) -replace "profile\s*=\s*'.*?'", "profile = 'prod'" | Set-Content $f
+          Write-Host "---- deployed settings.py ----"
+          Get-Content $f
